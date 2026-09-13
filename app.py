@@ -182,6 +182,151 @@ def _seed_prefill(data: dict) -> None:
     st.session_state["f_reference"] = str(data.get("reference") or "")
 
 
+def _clean_facture(data: dict) -> dict:
+    """Normalise un dict brut renvoyé par l'IA vers des valeurs prêtes à enregistrer."""
+    from datetime import datetime
+    try:
+        d = datetime.strptime(str(data.get("date_facture") or ""), "%Y-%m-%d").date()
+    except Exception:
+        d = date.today()
+    cat = data.get("categorie") or "Divers"
+    moy = data.get("moyen_paiement") or ""
+    stt = data.get("statut") or "À payer"
+    return {
+        "date": d,
+        "fournisseur": str(data.get("fournisseur") or ""),
+        "categorie": cat if cat in CATEGORIES else "Divers",
+        "montant_ht": _num(data.get("montant_ht")),
+        "tva": _num(data.get("tva")) or 20.0,
+        "statut": stt if stt in STATUTS_FACTURE else "À payer",
+        "moyen_paiement": moy if moy in MOYENS_PAIEMENT else "Autre",
+        "reference": str(data.get("reference") or ""),
+    }
+
+
+def _annotate_duplicates(rows: list[dict]) -> list[dict]:
+    """Marque chaque ligne comme doublon (vs base + à l'intérieur du lot)."""
+    with SessionLocal() as s:
+        existing = s.query(Facture.fournisseur, Facture.reference,
+                           Facture.date_facture, Facture.montant_ht).all()
+    ref_set, amt_set = set(), set()
+    for f, r, dt, ht in existing:
+        fl = (f or "").strip().lower()
+        if r:
+            ref_set.add(str(r).strip().lower())
+        amt_set.add((fl, str(dt), round(float(ht or 0), 2)))
+
+    seen_ref, seen_amt = set(), set()
+    for row in rows:
+        fl = row["fournisseur"].strip().lower()
+        ref = (row["reference"] or "").strip().lower()
+        key_amt = (fl, str(row["date"]), round(row["montant_ht"], 2))
+        raison = ""
+        if ref and (ref in ref_set or ref in seen_ref):
+            raison = "Référence déjà présente"
+        elif key_amt in amt_set or key_amt in seen_amt:
+            raison = "Même fournisseur / date / montant"
+        row["doublon"] = bool(raison)
+        row["raison"] = raison
+        if ref:
+            seen_ref.add(ref)
+        seen_amt.add(key_amt)
+    return rows
+
+
+def _batch_import_ui(user: str):
+    ups = st.file_uploader(
+        "Importer plusieurs factures à la fois (PDF, PNG, JPG)",
+        type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_upload",
+    )
+    if ups and st.button(f"🤖 Analyser les {len(ups)} factures"):
+        api_key = get_setting("openai_api_key")
+        if not api_key:
+            st.error("Aucune clé API enregistrée. Va dans ⚙️ Paramètres pour la saisir.")
+        else:
+            rows, files, errors = [], {}, []
+            prog = st.progress(0.0, text="Analyse en cours…")
+            for i, up in enumerate(ups):
+                try:
+                    row = _clean_facture(extract_facture(up.getvalue(), up.name, api_key=api_key))
+                except Exception as e:
+                    errors.append(f"{up.name} : {e}")
+                    row = _clean_facture({})
+                row.update({"idx": i, "fichier_nom": up.name, "fichier_type": up.type or ""})
+                files[i] = up.getvalue()
+                rows.append(row)
+                prog.progress((i + 1) / len(ups), text=f"{i + 1}/{len(ups)}")
+            st.session_state["batch"] = _annotate_duplicates(rows)
+            st.session_state["batch_files"] = files
+            st.session_state["batch_errors"] = errors
+            st.rerun()
+
+    batch = st.session_state.get("batch")
+    if not batch:
+        return
+
+    errs = st.session_state.get("batch_errors") or []
+    if errs:
+        st.warning("Factures illisibles (à compléter à la main) :\n- " + "\n- ".join(errs))
+    n_dup = sum(1 for r in batch if r["doublon"])
+    st.info(f"{len(batch)} facture(s) analysée(s), dont {n_dup} doublon(s) potentiel(s) "
+            "décoché(s) par défaut. Vérifie, corrige, puis enregistre.")
+
+    df = pd.DataFrame([{
+        "idx": r["idx"], "Importer": not r["doublon"], "Doublon": r["raison"],
+        "Date": pd.to_datetime(r["date"]), "Fournisseur": r["fournisseur"],
+        "Catégorie": r["categorie"], "Montant HT": r["montant_ht"], "TVA %": r["tva"],
+        "Statut": r["statut"], "Paiement": r["moyen_paiement"], "Réf.": r["reference"],
+        "Fichier": r["fichier_nom"],
+    } for r in batch]).set_index("idx")
+
+    edited = st.data_editor(
+        df, use_container_width=True, hide_index=True, num_rows="fixed", key="batch_editor",
+        column_config={
+            "Importer": st.column_config.CheckboxColumn("Importer"),
+            "Doublon": st.column_config.TextColumn("Doublon", disabled=True),
+            "Date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
+            "Catégorie": st.column_config.SelectboxColumn("Catégorie", options=CATEGORIES),
+            "Statut": st.column_config.SelectboxColumn("Statut", options=STATUTS_FACTURE),
+            "Paiement": st.column_config.SelectboxColumn("Paiement", options=MOYENS_PAIEMENT),
+            "Montant HT": st.column_config.NumberColumn("Montant HT", format="%.2f", min_value=0.0),
+            "TVA %": st.column_config.NumberColumn("TVA %", format="%.1f", min_value=0.0),
+            "Fichier": st.column_config.TextColumn("Fichier", disabled=True),
+        },
+    )
+
+    n_sel = int(edited["Importer"].sum())
+    col1, col2 = st.columns(2)
+    if col1.button(f"💾 Enregistrer les {n_sel} facture(s) sélectionnée(s)", disabled=n_sel == 0):
+        files = st.session_state.get("batch_files", {})
+        meta = {r["idx"]: r for r in batch}
+        with SessionLocal() as s:
+            for idx, row in edited.iterrows():
+                if not row["Importer"]:
+                    continue
+                m = meta.get(int(idx), {})
+                s.add(Facture(
+                    date_facture=pd.to_datetime(row["Date"]).date(),
+                    fournisseur=str(row["Fournisseur"] or ""),
+                    categorie=str(row["Catégorie"] or "Divers"),
+                    montant_ht=float(row["Montant HT"] or 0), tva=float(row["TVA %"] or 0),
+                    statut=str(row["Statut"] or "À payer"),
+                    moyen_paiement=str(row["Paiement"] or ""),
+                    reference=str(row["Réf."] or ""), cree_par=user,
+                    fichier=files.get(int(idx)),
+                    fichier_nom=m.get("fichier_nom", ""), fichier_type=m.get("fichier_type", ""),
+                ))
+            s.commit()
+        for k in ["batch", "batch_files", "batch_errors", "batch_upload", "batch_editor"]:
+            st.session_state.pop(k, None)
+        st.success(f"{n_sel} facture(s) enregistrée(s).")
+        st.rerun()
+    if col2.button("Annuler l'import en lot"):
+        for k in ["batch", "batch_files", "batch_errors", "batch_upload", "batch_editor"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+
+
 def _save_facture_edits(edited: pd.DataFrame) -> None:
     """Réécrit en base les lignes éditées dans le tableau (indexé par id)."""
     with SessionLocal() as s:
@@ -268,6 +413,9 @@ def page_factures(user: str):
                 st.session_state.pop(k, None)
             st.success("Facture ajoutée." + (" Justificatif enregistré." if fichier_bytes else ""))
             st.rerun()
+
+    with st.expander("📦 Importer plusieurs factures d'un coup"):
+        _batch_import_ui(user)
 
     df = factures_df()
     if df.empty:
