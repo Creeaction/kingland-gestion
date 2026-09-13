@@ -30,9 +30,9 @@ PROMPT = (
 )
 
 
-def _client():
+def _client(api_key: str | None = None):
     import os
-    key = "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"
+    key = api_key or os.environ.get("OPENAI_API_KEY")
     if not key:
         try:
             import streamlit as st
@@ -41,7 +41,7 @@ def _client():
             key = None
     if not key:
         raise RuntimeError(
-            "Clé OPENAI_API_KEY absente. Ajoute-la dans les secrets de l'app."
+            "Aucune clé API OpenAI. Saisis-la dans la page Paramètres de l'app."
         )
     from openai import OpenAI
     return OpenAI(api_key=key)
@@ -64,9 +64,9 @@ def _file_to_data_uris(file_bytes: bytes, filename: str) -> list[str]:
     return [f"data:{mime};base64,{b64}"]
 
 
-def extract_facture(file_bytes: bytes, filename: str) -> dict:
+def extract_facture(file_bytes: bytes, filename: str, api_key: str | None = None) -> dict:
     """Renvoie un dict avec les champs de la facture."""
-    client = _client()
+    client = _client(api_key)
     content = [{"type": "text", "text": PROMPT}]
     for uri in _file_to_data_uris(file_bytes, filename):
         content.append({"type": "image_url", "image_url": {"url": uri}})
