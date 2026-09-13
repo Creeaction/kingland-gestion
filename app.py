@@ -14,6 +14,7 @@ from db import (
     Facture, Offre, Candidature,
     CATEGORIES, STATUTS_FACTURE, TYPES_POSTE, STATUTS_OFFRE,
     STATUTS_CANDIDATURE, MOYENS_PAIEMENT,
+    get_setting, set_setting,
 )
 from ai_extract import extract_facture
 
@@ -173,14 +174,19 @@ def page_factures(user: str):
         )
         if up is not None:
             if st.button("🤖 Analyser la facture avec l'IA"):
-                try:
-                    with st.spinner("Lecture de la facture en cours…"):
-                        data = extract_facture(up.getvalue(), up.name)
-                    _seed_prefill(data)
-                    st.session_state["prefilled"] = True
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Analyse impossible : {e}")
+                api_key = get_setting("openai_api_key")
+                if not api_key:
+                    st.error("Aucune clé API enregistrée. Va dans ⚙️ Paramètres "
+                             "pour la saisir (une seule fois).")
+                else:
+                    try:
+                        with st.spinner("Lecture de la facture en cours…"):
+                            data = extract_facture(up.getvalue(), up.name, api_key=api_key)
+                        _seed_prefill(data)
+                        st.session_state["prefilled"] = True
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Analyse impossible : {e}")
 
         if st.session_state.get("prefilled"):
             st.success("Champs pré-remplis par l'IA — vérifie et corrige avant d'enregistrer.")
@@ -405,6 +411,38 @@ def page_recrutement(user: str):
 # ------------------------------------------------------------------ #
 #  App
 # ------------------------------------------------------------------ #
+def page_parametres():
+    st.header("⚙️ Paramètres")
+    st.subheader("Clé API OpenAI")
+    st.caption("Nécessaire pour la lecture automatique des factures. "
+               "À saisir une seule fois : elle est conservée pour toi et pour Matth.")
+
+    current = get_setting("openai_api_key")
+    if current:
+        masque = current[:7] + "…" + current[-4:]
+        st.success(f"Une clé est enregistrée ({masque}).")
+    else:
+        st.warning("Aucune clé enregistrée — la lecture automatique est désactivée.")
+
+    new_key = st.text_input("Saisir ou remplacer la clé", type="password",
+                            placeholder="sk-...", key="param_key")
+    c1, c2 = st.columns(2)
+    if c1.button("💾 Enregistrer la clé"):
+        if new_key.strip():
+            set_setting("openai_api_key", new_key.strip())
+            st.session_state.pop("param_key", None)
+            st.success("Clé enregistrée.")
+            st.rerun()
+        else:
+            st.error("Colle une clé avant d'enregistrer.")
+    if current and c2.button("🗑️ Supprimer la clé"):
+        set_setting("openai_api_key", "")
+        st.rerun()
+
+    st.info("La clé est stockée dans ta base Neon privée, jamais dans le code ni sur GitHub. "
+            "En cas de doute, tu peux la révoquer sur platform.openai.com et en saisir une nouvelle ici.")
+
+
 def main():
     user = login_gate()
     if not user:
@@ -414,7 +452,7 @@ def main():
         st.markdown("### 🛡️ KingLand Gestion")
         st.caption(f"Connecté : **{user}**")
         page = st.radio("Navigation",
-                        ["Tableau de bord", "Factures", "Budgets", "Recrutement"])
+                        ["Tableau de bord", "Factures", "Budgets", "Recrutement", "Paramètres"])
         st.divider()
         if st.button("Se déconnecter"):
             st.session_state.pop("user", None)
@@ -428,6 +466,8 @@ def main():
         page_budgets()
     elif page == "Recrutement":
         page_recrutement(user)
+    elif page == "Paramètres":
+        page_parametres()
 
 
 if __name__ == "__main__":
