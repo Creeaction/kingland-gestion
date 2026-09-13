@@ -15,6 +15,7 @@ from db import (
     CATEGORIES, STATUTS_FACTURE, TYPES_POSTE, STATUTS_OFFRE,
     STATUTS_CANDIDATURE, MOYENS_PAIEMENT,
     get_setting, set_setting,
+    list_users, create_user, delete_user, check_login,
 )
 from ai_extract import extract_facture
 
@@ -51,9 +52,14 @@ def login_gate() -> str | None:
         p = st.text_input("Mot de passe", type="password")
         ok = st.form_submit_button("Se connecter")
     if ok:
-        users = _users()
-        if u in users and str(users[u]) == p:
-            st.session_state["user"] = u
+        # 1) comptes créés en base  2) comptes des secrets (secours)
+        disp = check_login(u, p)
+        if not disp:
+            users = _users()
+            if u in users and str(users[u]) == p:
+                disp = u.capitalize()
+        if disp:
+            st.session_state["user"] = disp
             st.rerun()
         else:
             st.error("Identifiant ou mot de passe incorrect.")
@@ -71,7 +77,8 @@ def factures_df() -> pd.DataFrame:
             "Catégorie": f.categorie, "Description": f.description,
             "Montant HT": f.montant_ht, "TVA %": f.tva, "Montant TTC": f.montant_ttc,
             "Statut": f.statut, "Paiement": f.moyen_paiement,
-            "Réf.": f.reference, "Lien": f.lien_fichier, "Par": f.cree_par,
+            "Réf.": f.reference, "Fichier": "📎" if f.fichier_nom else "",
+            "Lien": f.lien_fichier, "Par": f.cree_par,
         } for f in rows]
     return pd.DataFrame(data)
 
@@ -93,14 +100,11 @@ def page_dashboard():
     total_ttc = df["Montant TTC"].sum()
     a_payer = df.loc[df["Statut"] == "À payer", "Montant TTC"].sum()
     df["mois"] = pd.to_datetime(df["Date"]).dt.to_period("M").astype(str)
-    mois_courant = date.today().strftime("%Y-%m")
-    ce_mois = df.loc[df["mois"] == mois_courant, "Montant TTC"].sum()
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Total dépensé (TTC)", eur(total_ttc))
-    c2.metric("Ce mois-ci", eur(ce_mois))
-    c3.metric("Reste à payer", eur(a_payer))
-    c4.metric("Nombre de factures", len(df))
+    c2.metric("Reste à payer", eur(a_payer))
+    c3.metric("Nombre de factures", len(df))
 
     st.divider()
     g1, g2 = st.columns(2)
@@ -116,14 +120,30 @@ def page_dashboard():
         st.altair_chart(chart, use_container_width=True)
 
     with g2:
-        st.subheader("Dépenses par mois")
-        par_mois = df.groupby("mois", as_index=False)["Montant TTC"].sum().sort_values("mois")
-        bar = alt.Chart(par_mois).mark_bar().encode(
-            x=alt.X("mois:N", title="Mois"),
-            y=alt.Y("Montant TTC:Q", title="€ TTC"),
-            tooltip=["mois", alt.Tooltip("Montant TTC:Q", format=",.2f")],
+        st.subheader("Répartition des paiements par personne")
+        pers = df.copy()
+        pers["Personne"] = (pers["Par"].fillna("").str.strip().str.capitalize()
+                            .replace("", "Non précisé"))
+        pers = pers.groupby("Personne", as_index=False)["Montant TTC"].sum()
+        tot = pers["Montant TTC"].sum()
+        pers["Part"] = (pers["Montant TTC"] / tot * 100) if tot else 0
+        donut = alt.Chart(pers).mark_arc(innerRadius=55).encode(
+            theta="Montant TTC:Q",
+            color=alt.Color("Personne:N", legend=alt.Legend(orient="bottom")),
+            tooltip=["Personne",
+                     alt.Tooltip("Montant TTC:Q", format=",.2f", title="Montant TTC"),
+                     alt.Tooltip("Part:Q", format=".1f", title="Part %")],
         )
-        st.altair_chart(bar, use_container_width=True)
+        st.altair_chart(donut, use_container_width=True)
+
+    st.subheader("Dépenses par mois")
+    par_mois = df.groupby("mois", as_index=False)["Montant TTC"].sum().sort_values("mois")
+    bar = alt.Chart(par_mois).mark_bar().encode(
+        x=alt.X("mois:N", title="Mois"),
+        y=alt.Y("Montant TTC:Q", title="€ TTC"),
+        tooltip=["mois", alt.Tooltip("Montant TTC:Q", format=",.2f")],
+    )
+    st.altair_chart(bar, use_container_width=True)
 
     st.subheader("Top fournisseurs")
     top = (df.groupby("Fournisseur", as_index=False)["Montant TTC"].sum()
@@ -205,18 +225,24 @@ def page_factures(user: str):
         lien = c3.text_input("Lien vers le fichier (Drive, etc.)", key="f_lien")
         description = st.text_area("Description", height=70, key="f_desc")
 
+        st.metric("💶 Montant TTC", eur(ht * (1 + tva / 100.0)))
+
         if st.button("💾 Enregistrer la facture"):
+            fichier_bytes = up.getvalue() if up is not None else None
+            fichier_nom = up.name if up is not None else ""
+            fichier_type = (up.type or "") if up is not None else ""
             with SessionLocal() as s:
                 s.add(Facture(
                     date_facture=d, fournisseur=fournisseur, categorie=categorie,
                     description=description, montant_ht=ht, tva=tva, statut=statut,
                     moyen_paiement=paiement, reference=reference, lien_fichier=lien,
                     cree_par=user,
+                    fichier=fichier_bytes, fichier_nom=fichier_nom, fichier_type=fichier_type,
                 ))
                 s.commit()
             for k in FACT_KEYS + ["prefilled", "fact_upload"]:
                 st.session_state.pop(k, None)
-            st.success("Facture ajoutée.")
+            st.success("Facture ajoutée." + (" Justificatif enregistré." if fichier_bytes else ""))
             st.rerun()
 
     df = factures_df()
@@ -250,6 +276,28 @@ def page_factures(user: str):
         "⬇️ Exporter en CSV", view.drop(columns=["id"]).to_csv(index=False).encode("utf-8"),
         file_name="factures_kingland.csv", mime="text/csv",
     )
+
+    with st.expander("📎 Justificatifs importés (télécharger)"):
+        with SessionLocal() as s:
+            avec_fichier = (s.query(Facture.id, Facture.fournisseur, Facture.date_facture,
+                                    Facture.fichier_nom)
+                            .filter(Facture.fichier_nom != "")
+                            .order_by(Facture.date_facture.desc()).all())
+        if avec_fichier:
+            opt = st.selectbox(
+                "Facture avec justificatif", avec_fichier,
+                format_func=lambda r: f"#{r.id} · {r.date_facture} · {r.fournisseur} · {r.fichier_nom}",
+            )
+            with SessionLocal() as s:
+                obj = s.get(Facture, int(opt.id))
+                st.download_button(
+                    "⬇️ Télécharger le fichier",
+                    data=obj.fichier or b"",
+                    file_name=obj.fichier_nom or f"facture_{obj.id}",
+                    mime=obj.fichier_type or "application/octet-stream",
+                )
+        else:
+            st.caption("Aucun fichier importé pour l'instant.")
 
     with st.expander("🗑️ Supprimer une facture"):
         ids = view["id"].tolist()
@@ -443,6 +491,44 @@ def page_parametres():
             "En cas de doute, tu peux la révoquer sur platform.openai.com et en saisir une nouvelle ici.")
 
 
+def page_utilisateurs():
+    st.header("👤 Utilisateurs")
+    st.caption("Crée des comptes pour accéder à l'app. Les mots de passe sont chiffrés "
+               "en base. Tes comptes d'origine (secrets) restent valables en secours.")
+
+    users = list_users()
+    if users:
+        st.dataframe(
+            pd.DataFrame(users, columns=["Identifiant", "Nom affiché"]),
+            hide_index=True, use_container_width=True,
+        )
+    else:
+        st.info("Aucun utilisateur créé en base pour l'instant.")
+
+    st.subheader("Créer un utilisateur")
+    nu = st.text_input("Identifiant (sans espace, en minuscules)", key="nu_user")
+    nd = st.text_input("Nom affiché (ex. Mathieu)", key="nu_disp")
+    npw = st.text_input("Mot de passe", type="password", key="nu_pw")
+    if st.button("Créer l'utilisateur"):
+        ident = nu.strip().lower()
+        if not ident or not npw:
+            st.error("Identifiant et mot de passe obligatoires.")
+        elif create_user(ident, nd.strip(), npw):
+            for k in ["nu_user", "nu_disp", "nu_pw"]:
+                st.session_state.pop(k, None)
+            st.success(f"Utilisateur « {ident} » créé.")
+            st.rerun()
+        else:
+            st.error("Cet identifiant existe déjà.")
+
+    if users:
+        st.subheader("Supprimer un utilisateur")
+        du = st.selectbox("Utilisateur à supprimer", [u[0] for u in users], key="del_user_sel")
+        if st.button("Supprimer", type="primary"):
+            delete_user(du)
+            st.rerun()
+
+
 def main():
     user = login_gate()
     if not user:
@@ -452,7 +538,8 @@ def main():
         st.markdown("### 🛡️ KingLand Gestion")
         st.caption(f"Connecté : **{user}**")
         page = st.radio("Navigation",
-                        ["Tableau de bord", "Factures", "Budgets", "Recrutement", "Paramètres"])
+                        ["Tableau de bord", "Factures", "Budgets", "Recrutement",
+                         "Utilisateurs", "Paramètres"])
         st.divider()
         if st.button("Se déconnecter"):
             st.session_state.pop("user", None)
@@ -466,6 +553,8 @@ def main():
         page_budgets()
     elif page == "Recrutement":
         page_recrutement(user)
+    elif page == "Utilisateurs":
+        page_utilisateurs()
     elif page == "Paramètres":
         page_parametres()
 
