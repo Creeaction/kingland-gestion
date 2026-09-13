@@ -32,7 +32,7 @@ PROMPT = (
 
 def _client():
     import os
-    key = os.environ.get("OPENAI_API_KEY")
+    key = "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"
     if not key:
         try:
             import streamlit as st
