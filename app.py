@@ -15,6 +15,7 @@ from db import (
     CATEGORIES, STATUTS_FACTURE, TYPES_POSTE, STATUTS_OFFRE,
     STATUTS_CANDIDATURE, MOYENS_PAIEMENT,
 )
+from ai_extract import extract_facture
 
 st.set_page_config(page_title="KingLand Gestion", page_icon="🛡️", layout="wide")
 init_db()
@@ -129,35 +130,88 @@ def page_dashboard():
     st.dataframe(top, use_container_width=True, hide_index=True)
 
 
+FACT_KEYS = ["f_date", "f_fournisseur", "f_categorie", "f_ht", "f_tva",
+             "f_statut", "f_paiement", "f_reference", "f_lien", "f_desc"]
+
+
+def _num(x) -> float:
+    try:
+        return float(str(x).replace("€", "").replace(",", ".").strip() or 0)
+    except Exception:
+        return 0.0
+
+
+def _seed_prefill(data: dict) -> None:
+    """Range les champs lus par l'IA dans l'état des widgets (tout reste modifiable)."""
+    from datetime import datetime
+    try:
+        st.session_state["f_date"] = datetime.strptime(
+            str(data.get("date_facture") or ""), "%Y-%m-%d").date()
+    except Exception:
+        st.session_state["f_date"] = date.today()
+    st.session_state["f_fournisseur"] = str(data.get("fournisseur") or "")
+    cat = data.get("categorie") or "Divers"
+    st.session_state["f_categorie"] = cat if cat in CATEGORIES else "Divers"
+    st.session_state["f_ht"] = _num(data.get("montant_ht"))
+    st.session_state["f_tva"] = _num(data.get("tva")) or 20.0
+    stt = data.get("statut") or "À payer"
+    st.session_state["f_statut"] = stt if stt in STATUTS_FACTURE else "À payer"
+    moy = data.get("moyen_paiement") or ""
+    st.session_state["f_paiement"] = moy if moy in MOYENS_PAIEMENT else "Autre"
+    st.session_state["f_reference"] = str(data.get("reference") or "")
+
+
 def page_factures(user: str):
     st.header("🧾 Factures")
 
-    with st.expander("➕ Ajouter une facture", expanded=False):
-        with st.form("add_facture", clear_on_submit=True):
-            a, b, c = st.columns(3)
-            d = a.date_input("Date", value=date.today())
-            fournisseur = b.text_input("Fournisseur")
-            categorie = c.selectbox("Catégorie", CATEGORIES)
-            a2, b2, c2 = st.columns(3)
-            ht = a2.number_input("Montant HT (€)", min_value=0.0, step=10.0, format="%.2f")
-            tva = b2.number_input("TVA (%)", min_value=0.0, value=20.0, step=1.0, format="%.1f")
-            statut = c2.selectbox("Statut", STATUTS_FACTURE)
-            a3, b3, c3 = st.columns(3)
-            paiement = a3.selectbox("Moyen de paiement", MOYENS_PAIEMENT)
-            reference = b3.text_input("Référence / n° facture")
-            lien = c3.text_input("Lien vers le fichier (Drive, etc.)")
-            description = st.text_area("Description", height=70)
-            if st.form_submit_button("Enregistrer"):
-                with SessionLocal() as s:
-                    s.add(Facture(
-                        date_facture=d, fournisseur=fournisseur, categorie=categorie,
-                        description=description, montant_ht=ht, tva=tva, statut=statut,
-                        moyen_paiement=paiement, reference=reference, lien_fichier=lien,
-                        cree_par=user,
-                    ))
-                    s.commit()
-                st.success("Facture ajoutée.")
-                st.rerun()
+    st.session_state.setdefault("f_tva", 20.0)  # défaut TVA en saisie manuelle
+
+    with st.expander("➕ Ajouter une facture", expanded=bool(st.session_state.get("prefilled"))):
+        up = st.file_uploader(
+            "📎 Importer une facture (PDF, PNG, JPG) — lecture automatique par l'IA",
+            type=["pdf", "png", "jpg", "jpeg"], key="fact_upload",
+        )
+        if up is not None:
+            if st.button("🤖 Analyser la facture avec l'IA"):
+                try:
+                    with st.spinner("Lecture de la facture en cours…"):
+                        data = extract_facture(up.getvalue(), up.name)
+                    _seed_prefill(data)
+                    st.session_state["prefilled"] = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Analyse impossible : {e}")
+
+        if st.session_state.get("prefilled"):
+            st.success("Champs pré-remplis par l'IA — vérifie et corrige avant d'enregistrer.")
+
+        a, b, c = st.columns(3)
+        d = a.date_input("Date", key="f_date")
+        fournisseur = b.text_input("Fournisseur", key="f_fournisseur")
+        categorie = c.selectbox("Catégorie", CATEGORIES, key="f_categorie")
+        a2, b2, c2 = st.columns(3)
+        ht = a2.number_input("Montant HT (€)", min_value=0.0, step=10.0, format="%.2f", key="f_ht")
+        tva = b2.number_input("TVA (%)", min_value=0.0, step=1.0, format="%.1f", key="f_tva")
+        statut = c2.selectbox("Statut", STATUTS_FACTURE, key="f_statut")
+        a3, b3, c3 = st.columns(3)
+        paiement = a3.selectbox("Moyen de paiement", MOYENS_PAIEMENT, key="f_paiement")
+        reference = b3.text_input("Référence / n° facture", key="f_reference")
+        lien = c3.text_input("Lien vers le fichier (Drive, etc.)", key="f_lien")
+        description = st.text_area("Description", height=70, key="f_desc")
+
+        if st.button("💾 Enregistrer la facture"):
+            with SessionLocal() as s:
+                s.add(Facture(
+                    date_facture=d, fournisseur=fournisseur, categorie=categorie,
+                    description=description, montant_ht=ht, tva=tva, statut=statut,
+                    moyen_paiement=paiement, reference=reference, lien_fichier=lien,
+                    cree_par=user,
+                ))
+                s.commit()
+            for k in FACT_KEYS + ["prefilled", "fact_upload"]:
+                st.session_state.pop(k, None)
+            st.success("Facture ajoutée.")
+            st.rerun()
 
     df = factures_df()
     if df.empty:
