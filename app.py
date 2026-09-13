@@ -182,6 +182,30 @@ def _seed_prefill(data: dict) -> None:
     st.session_state["f_reference"] = str(data.get("reference") or "")
 
 
+def _save_facture_edits(edited: pd.DataFrame) -> None:
+    """Réécrit en base les lignes éditées dans le tableau (indexé par id)."""
+    with SessionLocal() as s:
+        for fid, row in edited.iterrows():
+            obj = s.get(Facture, int(fid))
+            if obj is None:
+                continue
+            try:
+                obj.date_facture = pd.to_datetime(row["Date"]).date()
+            except Exception:
+                pass
+            obj.fournisseur = str(row["Fournisseur"] or "")
+            obj.categorie = str(row["Catégorie"] or "Divers")
+            obj.description = str(row["Description"] or "")
+            obj.montant_ht = float(row["Montant HT"] or 0)
+            obj.tva = float(row["TVA %"] or 0)
+            obj.statut = str(row["Statut"] or "À payer")
+            obj.moyen_paiement = str(row["Paiement"] or "")
+            obj.reference = str(row["Réf."] or "")
+            obj.lien_fichier = str(row["Lien"] or "")
+            obj.cree_par = str(row["Par"] or "")
+        s.commit()
+
+
 def page_factures(user: str):
     st.header("🧾 Factures")
 
@@ -266,11 +290,26 @@ def page_factures(user: str):
         view = view[m]
 
     st.caption(f"{len(view)} facture(s) · Total TTC filtré : {eur(view['Montant TTC'].sum())}")
-    st.dataframe(
-        view.drop(columns=["id"]),
-        use_container_width=True, hide_index=True,
-        column_config={"Lien": st.column_config.LinkColumn("Lien")},
+    st.caption("✏️ Tu peux corriger les cellules directement (fournisseur, catégorie, montant…), "
+               "puis clique **Enregistrer les modifications**.")
+    edit_df = view.drop(columns=["Montant TTC", "Fichier"]).set_index("id")
+    edited = st.data_editor(
+        edit_df, use_container_width=True, hide_index=True, num_rows="fixed",
+        key="fact_editor",
+        column_config={
+            "Date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
+            "Catégorie": st.column_config.SelectboxColumn("Catégorie", options=CATEGORIES),
+            "Statut": st.column_config.SelectboxColumn("Statut", options=STATUTS_FACTURE),
+            "Paiement": st.column_config.SelectboxColumn("Paiement", options=MOYENS_PAIEMENT),
+            "Montant HT": st.column_config.NumberColumn("Montant HT", format="%.2f", min_value=0.0),
+            "TVA %": st.column_config.NumberColumn("TVA %", format="%.1f", min_value=0.0),
+            "Lien": st.column_config.LinkColumn("Lien"),
+        },
     )
+    if st.button("💾 Enregistrer les modifications"):
+        _save_facture_edits(edited)
+        st.success("Modifications enregistrées.")
+        st.rerun()
 
     st.download_button(
         "⬇️ Exporter en CSV", view.drop(columns=["id"]).to_csv(index=False).encode("utf-8"),
