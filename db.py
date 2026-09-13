@@ -91,6 +91,30 @@ class Candidature(Base):
     cree_par: Mapped[str] = mapped_column(String(50), default="")
 
 
+class AppSetting(Base):
+    """Petits réglages de l'app stockés en base (ex. clé API OpenAI)."""
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with SessionLocal() as s:
+        obj = s.get(AppSetting, key)
+        return obj.value if obj and obj.value else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with SessionLocal() as s:
+        obj = s.get(AppSetting, key)
+        if obj:
+            obj.value = value
+        else:
+            s.add(AppSetting(key=key, value=value))
+        s.commit()
+
+
 def init_db() -> None:
     Base.metadata.create_all(ENGINE)
 
