@@ -70,6 +70,7 @@ def login_gate() -> str | None:
 # ------------------------------------------------------------------ #
 #  Helpers données
 # ------------------------------------------------------------------ #
+@st.cache_data(ttl=300, show_spinner=False)
 def factures_df() -> pd.DataFrame:
     with SessionLocal() as s:
         rows = s.query(Facture).order_by(Facture.date_facture.desc()).all()
@@ -320,6 +321,7 @@ def _batch_import_ui(user: str):
             s.commit()
         for k in ["batch", "batch_files", "batch_errors", "batch_upload", "batch_editor"]:
             st.session_state.pop(k, None)
+        factures_df.clear()
         st.success(f"{n_sel} facture(s) enregistrée(s).")
         st.rerun()
     if col2.button("Annuler l'import en lot"):
@@ -412,6 +414,7 @@ def page_factures(user: str):
                 s.commit()
             for k in FACT_KEYS + ["prefilled", "fact_upload"]:
                 st.session_state.pop(k, None)
+            factures_df.clear()
             st.success("Facture ajoutée." + (" Justificatif enregistré." if fichier_bytes else ""))
             st.rerun()
 
@@ -457,6 +460,7 @@ def page_factures(user: str):
     )
     if st.button("💾 Enregistrer les modifications"):
         _save_facture_edits(edited)
+        factures_df.clear()
         st.success("Modifications enregistrées.")
         st.rerun()
 
@@ -501,6 +505,7 @@ def page_factures(user: str):
                     if obj:
                         s.delete(obj)
                         s.commit()
+                factures_df.clear()
                 st.rerun()
 
 
