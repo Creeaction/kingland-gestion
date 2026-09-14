@@ -16,6 +16,7 @@ from db import (
     STATUTS_CANDIDATURE, MOYENS_PAIEMENT,
     get_setting, set_setting,
     list_users, create_user, delete_user, check_login,
+    backend_label,
 )
 from ai_extract import extract_facture
 
@@ -731,6 +732,7 @@ def main():
         if st.button("Se déconnecter"):
             st.session_state.pop("user", None)
             st.rerun()
+        st.caption(f"Base : {backend_label()}")
 
     if page == "Tableau de bord":
         page_dashboard()
