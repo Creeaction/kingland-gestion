@@ -22,23 +22,42 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker,
 
 
 def _database_url() -> str:
-    # 1) variable d'environnement / secret Streamlit  2) SQLite local par défaut
+    # 1) variable d'environnement
     url = os.environ.get("DATABASE_URL")
-    if not url:
-        try:
-            import streamlit as st
-            url = st.secrets.get("DATABASE_URL", None)
-        except Exception:
-            url = None
-    return url or "sqlite:///kingland.db"
+    if url:
+        return url
+    # 2) secrets Streamlit — au niveau principal…
+    try:
+        import streamlit as st
+        if "DATABASE_URL" in st.secrets:
+            return str(st.secrets["DATABASE_URL"])
+        # …ou rangée par erreur sous une section comme [auth]
+        for section in list(st.secrets.keys()):
+            val = st.secrets[section]
+            if hasattr(val, "keys") and "DATABASE_URL" in val:
+                return str(val["DATABASE_URL"])
+    except Exception:
+        pass
+    # 3) SQLite local par défaut (dev uniquement)
+    return "sqlite:///kingland.db"
 
+
+DATABASE_URL = _database_url()
+IS_SQLITE = DATABASE_URL.startswith("sqlite")
 
 ENGINE = create_engine(
-    _database_url(),
-    connect_args={"check_same_thread": False} if _database_url().startswith("sqlite") else {},
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if IS_SQLITE else {},
     pool_pre_ping=True,
 )
 SessionLocal = sessionmaker(bind=ENGINE, expire_on_commit=False)
+
+
+def backend_label() -> str:
+    """Libellé lisible de la base active, à afficher dans l'app."""
+    if IS_SQLITE:
+        return "⚠️ SQLite local (données NON persistantes)"
+    return "Neon / PostgreSQL"
 
 
 class Base(DeclarativeBase):
