@@ -79,7 +79,7 @@ def factures_df() -> pd.DataFrame:
             "Catégorie": f.categorie, "Description": f.description,
             "Montant HT": f.montant_ht, "TVA %": f.tva, "Montant TTC": f.montant_ttc,
             "Statut": f.statut, "Paiement": f.moyen_paiement,
-            "Réf.": f.reference, "Fichier": "📎" if f.fichier_nom else "",
+            "Réf.": f.reference, "Fichier": f.fichier_nom or "",
             "Lien": f.lien_fichier, "Par": f.cree_par,
         } for f in rows]
     return pd.DataFrame(data)
@@ -177,8 +177,8 @@ def _seed_prefill(data: dict) -> None:
     st.session_state["f_categorie"] = cat if cat in CATEGORIES else "Divers"
     st.session_state["f_ht"] = _num(data.get("montant_ht"))
     st.session_state["f_tva"] = _num(data.get("tva")) or 20.0
-    stt = data.get("statut") or "À payer"
-    st.session_state["f_statut"] = stt if stt in STATUTS_FACTURE else "À payer"
+    stt = data.get("statut") or "Payée"
+    st.session_state["f_statut"] = stt if stt in STATUTS_FACTURE else "Payée"
     moy = data.get("moyen_paiement") or ""
     st.session_state["f_paiement"] = moy if moy in MOYENS_PAIEMENT else "Autre"
     st.session_state["f_reference"] = str(data.get("reference") or "")
@@ -193,14 +193,14 @@ def _clean_facture(data: dict) -> dict:
         d = date.today()
     cat = data.get("categorie") or "Divers"
     moy = data.get("moyen_paiement") or ""
-    stt = data.get("statut") or "À payer"
+    stt = data.get("statut") or "Payée"
     return {
         "date": d,
         "fournisseur": str(data.get("fournisseur") or ""),
         "categorie": cat if cat in CATEGORIES else "Divers",
         "montant_ht": _num(data.get("montant_ht")),
         "tva": _num(data.get("tva")) or 20.0,
-        "statut": stt if stt in STATUTS_FACTURE else "À payer",
+        "statut": stt if stt in STATUTS_FACTURE else "Payée",
         "moyen_paiement": moy if moy in MOYENS_PAIEMENT else "Autre",
         "reference": str(data.get("reference") or ""),
     }
@@ -222,17 +222,23 @@ def _annotate_duplicates(rows: list[dict]) -> list[dict]:
     for row in rows:
         fl = row["fournisseur"].strip().lower()
         ref = (row["reference"] or "").strip().lower()
+        # Ligne vide (lecture échouée) : ni doublon, ni mémorisée
+        if not fl and row["montant_ht"] == 0 and not ref:
+            row["doublon"] = False
+            row["raison"] = "À compléter (lecture échouée)"
+            continue
         key_amt = (fl, str(row["date"]), round(row["montant_ht"], 2))
         raison = ""
         if ref and (ref in ref_set or ref in seen_ref):
             raison = "Référence déjà présente"
-        elif key_amt in amt_set or key_amt in seen_amt:
+        elif row["montant_ht"] > 0 and (key_amt in amt_set or key_amt in seen_amt):
             raison = "Même fournisseur / date / montant"
         row["doublon"] = bool(raison)
         row["raison"] = raison
         if ref:
             seen_ref.add(ref)
-        seen_amt.add(key_amt)
+        if row["montant_ht"] > 0:
+            seen_amt.add(key_amt)
     return rows
 
 
@@ -269,7 +275,11 @@ def _batch_import_ui(user: str):
 
     errs = st.session_state.get("batch_errors") or []
     if errs:
-        st.warning("Factures illisibles (à compléter à la main) :\n- " + "\n- ".join(errs))
+        st.warning(f"⚠️ {len(errs)} facture(s) illisible(s) (souvent : limite de l'API "
+                   "atteinte). Elles sont pré-remplies à vide, à compléter ou à réanalyser.")
+        with st.expander("Voir le détail des erreurs"):
+            for e in errs:
+                st.caption(e)
     n_dup = sum(1 for r in batch if r["doublon"])
     st.info(f"{len(batch)} facture(s) analysée(s), dont {n_dup} doublon(s) potentiel(s) "
             "décoché(s) par défaut. Vérifie, corrige, puis enregistre.")
@@ -444,7 +454,7 @@ def page_factures(user: str):
     st.caption(f"{len(view)} facture(s) · Total TTC filtré : {eur(view['Montant TTC'].sum())}")
     st.caption("✏️ Tu peux corriger les cellules directement (fournisseur, catégorie, montant…), "
                "puis clique **Enregistrer les modifications**.")
-    edit_df = view.drop(columns=["Montant TTC", "Fichier"]).set_index("id")
+    edit_df = view.drop(columns=["Montant TTC"]).set_index("id")
     edited = st.data_editor(
         edit_df, use_container_width=True, hide_index=True, num_rows="fixed",
         key="fact_editor",
@@ -455,6 +465,7 @@ def page_factures(user: str):
             "Paiement": st.column_config.SelectboxColumn("Paiement", options=MOYENS_PAIEMENT),
             "Montant HT": st.column_config.NumberColumn("Montant HT", format="%.2f", min_value=0.0),
             "TVA %": st.column_config.NumberColumn("TVA %", format="%.1f", min_value=0.0),
+            "Fichier": st.column_config.TextColumn("Justificatif", disabled=True),
             "Lien": st.column_config.LinkColumn("Lien"),
         },
     )
