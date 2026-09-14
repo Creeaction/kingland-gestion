@@ -17,10 +17,11 @@ PROMPT = (
     "autour, avec exactement ces clés :\n"
     '- "date_facture": date au format "AAAA-MM-JJ" (chaîne vide si absente)\n'
     '- "fournisseur": nom de l\'émetteur\n'
-    '- "montant_ht": montant hors taxes (nombre). Si seul le TTC figure avec un '
-    "taux de TVA, calcule le HT.\n"
-    '- "tva": taux de TVA en pourcentage (nombre, ex : 20). Si plusieurs, prends le principal.\n'
-    '- "montant_ttc": montant TTC (nombre)\n'
+    '- "montant_ht": montant HORS TAXES (souvent libellé "Subtotal" ou '
+    '"Total excluding tax"). Si seul le TTC figure avec un taux de TVA, calcule le HT.\n'
+    '- "tva": taux de TVA en pourcentage réellement affiché sur la facture '
+    "(ex : 19 pour l'Allemagne, 20 pour la France). Si plusieurs, prends le principal.\n"
+    '- "montant_ttc": montant total à payer (souvent "Total" ou "Amount due")\n'
     '- "statut": "Payée" si la facture est indiquée réglée/acquittée, sinon "À payer"\n'
     f'- "moyen_paiement": un parmi {MOYENS_PAIEMENT} ou "" si inconnu\n'
     '- "reference": numéro / référence de la facture\n'
@@ -44,7 +45,7 @@ def _client(api_key: str | None = None):
             "Aucune clé API OpenAI. Saisis-la dans la page Paramètres de l'app."
         )
     from openai import OpenAI
-    return OpenAI(api_key=key)
+    return OpenAI(api_key=key, max_retries=6, timeout=60)
 
 
 def _file_to_data_uris(file_bytes: bytes, filename: str) -> list[str]:
@@ -53,7 +54,7 @@ def _file_to_data_uris(file_bytes: bytes, filename: str) -> list[str]:
         import fitz  # PyMuPDF
         uris = []
         doc = fitz.open(stream=file_bytes, filetype="pdf")
-        for page in list(doc)[:3]:  # 3 premières pages suffisent
+        for page in list(doc)[:2]:  # 2 premières pages suffisent pour une facture
             pix = page.get_pixmap(dpi=150)
             b64 = base64.b64encode(pix.tobytes("png")).decode()
             uris.append(f"data:image/png;base64,{b64}")
