@@ -480,27 +480,26 @@ def page_factures(user: str):
         file_name="factures_kingland.csv", mime="text/csv",
     )
 
-    with st.expander("📎 Justificatifs importés (télécharger)"):
-        with SessionLocal() as s:
-            avec_fichier = (s.query(Facture.id, Facture.fournisseur, Facture.date_facture,
-                                    Facture.fichier_nom)
-                            .filter(Facture.fichier_nom != "")
-                            .order_by(Facture.date_facture.desc()).all())
-        if avec_fichier:
-            opt = st.selectbox(
-                "Facture avec justificatif", avec_fichier,
-                format_func=lambda r: f"#{r.id} · {r.date_facture} · {r.fournisseur} · {r.fichier_nom}",
-            )
+    files_view = view[view["Fichier"] != ""]
+    if not files_view.empty:
+        if st.checkbox(f"📎 Afficher les justificatifs à télécharger ({len(files_view)})"):
+            ids = [int(i) for i in files_view["id"].tolist()]
             with SessionLocal() as s:
-                obj = s.get(Facture, int(opt.id))
-                st.download_button(
-                    "⬇️ Télécharger le fichier",
-                    data=obj.fichier or b"",
-                    file_name=obj.fichier_nom or f"facture_{obj.id}",
-                    mime=obj.fichier_type or "application/octet-stream",
-                )
-        else:
-            st.caption("Aucun fichier importé pour l'instant.")
+                rowsf = (s.query(Facture.id, Facture.fichier,
+                                 Facture.fichier_nom, Facture.fichier_type)
+                         .filter(Facture.id.in_(ids)).all())
+            blobs = {r.id: r for r in rowsf}
+            cols = st.columns(3)
+            for k, fid in enumerate(ids):
+                r = blobs.get(fid)
+                if r and r.fichier:
+                    cols[k % 3].download_button(
+                        f"⬇️ {r.fichier_nom}", data=r.fichier,
+                        file_name=r.fichier_nom or f"facture_{fid}.pdf",
+                        mime=r.fichier_type or "application/octet-stream",
+                        key=f"dl_{fid}", use_container_width=True)
+    else:
+        st.caption("Aucun justificatif sur les factures affichées.")
 
     with st.expander("🗑️ Supprimer une facture"):
         ids = view["id"].tolist()
