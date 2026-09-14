@@ -238,7 +238,7 @@ CATEGORIES = [
     "Divers",
 ]
 
-STATUTS_FACTURE = ["À payer", "Payée"]
+STATUTS_FACTURE = ["Payée", "À payer"]
 TYPES_POSTE = ["Bénévole", "Rémunéré", "Part de revenus", "Stage"]
 STATUTS_OFFRE = ["Ouverte", "Fermée", "Pourvue"]
 STATUTS_CANDIDATURE = ["Reçue", "En cours", "Entretien", "Acceptée", "Refusée"]
