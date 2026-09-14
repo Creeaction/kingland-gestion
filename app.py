@@ -730,26 +730,25 @@ def main():
     with st.sidebar:
         st.markdown("### 🛡️ KingLand Gestion")
         st.caption(f"Connecté : **{user}**")
-        page = st.radio("Navigation",
-                        ["Tableau de bord", "Factures", "Budgets", "Recrutement",
-                         "Utilisateurs", "Paramètres"])
-        st.divider()
         if st.button("Se déconnecter"):
             st.session_state.pop("user", None)
             st.rerun()
         st.caption(f"Base : {backend_label()}")
 
-    if page == "Tableau de bord":
+    t_dash, t_fact, t_budg, t_recr, t_users, t_param = st.tabs(
+        ["📊 Tableau de bord", "🧾 Factures", "🎯 Budgets",
+         "👥 Recrutement", "👤 Utilisateurs", "⚙️ Paramètres"])
+    with t_dash:
         page_dashboard()
-    elif page == "Factures":
+    with t_fact:
         page_factures(user)
-    elif page == "Budgets":
+    with t_budg:
         page_budgets()
-    elif page == "Recrutement":
+    with t_recr:
         page_recrutement(user)
-    elif page == "Utilisateurs":
+    with t_users:
         page_utilisateurs()
-    elif page == "Paramètres":
+    with t_param:
         page_parametres()
 
 
